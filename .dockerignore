@@ -1,0 +1,13 @@
+.git
+.github
+.gitignore
+*.md
+docs/
+charts/
+k8s/
+catalog-info.yaml
+mkdocs.yaml
+tests/
+__pycache__
+*.pyc
+.env
