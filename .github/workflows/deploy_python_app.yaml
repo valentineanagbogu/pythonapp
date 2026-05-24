@@ -1,0 +1,176 @@
+name: deploy_python_app
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+      image_tag:
+        description: "Image tag to deploy (leave empty for latest)"
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  IMAGE_NAME: python-app
+  SOURCE_ACR: devaksacr
+  HELM_CHART_PATH: charts/python-app
+  HELM_RELEASE_NAME: python-app
+  K8S_NAMESPACE: python-app
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  build-and-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: dev
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ env.SOURCE_ACR }}
+
+      - name: Set image tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        run: |
+          docker build -t ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} .
+          docker build -t ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:latest .
+          docker push ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+          docker push ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+
+  deploy-auto:
+    name: Deploy (dev)
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: dev
+    env:
+      ACR_NAME: devaksacr
+      AKS_CLUSTER: dev-aks-aks
+      AKS_RG: dev-aks-rg
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        run: az aks get-credentials --resource-group ${{ env.AKS_RG }} --name ${{ env.AKS_CLUSTER }} --overwrite-existing
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
+            --namespace ${{ env.K8S_NAMESPACE }} \
+            --create-namespace \
+            --set image.repository=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }} \
+            --set image.tag=${{ needs.build-and-push.outputs.image_tag }} \
+            --wait \
+            --timeout 300s
+
+      - name: Verify deployment
+        run: kubectl rollout status deployment/${{ env.HELM_RELEASE_NAME }} -n ${{ env.K8S_NAMESPACE }} --timeout=120s
+
+  deploy-manual:
+    name: Deploy (${{ github.event.inputs.environment }})
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      ACR_NAME: ${{ github.event.inputs.environment == 'prod' && 'prodaksacr' || github.event.inputs.environment == 'uat' && 'testaksacr' || 'devaksacr' }}
+      AKS_CLUSTER: ${{ github.event.inputs.environment == 'prod' && 'prod-k8s-aks' || github.event.inputs.environment == 'uat' && 'test-k8s-aks' || 'dev-aks-aks' }}
+      AKS_RG: ${{ github.event.inputs.environment == 'prod' && 'prod-k8s-rg' || github.event.inputs.environment == 'uat' && 'test-k8s-rg' || 'dev-aks-rg' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Login to source ACR
+        run: az acr login --name ${{ env.SOURCE_ACR }}
+
+      - name: Import image to target ACR
+        if: env.ACR_NAME != env.SOURCE_ACR
+        run: |
+          az acr import \
+            --name ${{ env.ACR_NAME }} \
+            --source ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} \
+            --image ${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} \
+            --force
+
+      - name: Get AKS credentials
+        run: az aks get-credentials --resource-group ${{ env.AKS_RG }} --name ${{ env.AKS_CLUSTER }} --overwrite-existing
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
+            --namespace ${{ env.K8S_NAMESPACE }} \
+            --create-namespace \
+            --set image.repository=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }} \
+            --set image.tag=${{ steps.tag.outputs.tag }} \
+            --wait \
+            --timeout 300s
+
+      - name: Verify deployment
+        run: kubectl rollout status deployment/${{ env.HELM_RELEASE_NAME }} -n ${{ env.K8S_NAMESPACE }} --timeout=120s

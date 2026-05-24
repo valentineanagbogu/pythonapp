@@ -1,10 +1,23 @@
-FROM python:3.10-alpine
+FROM python:3.12-slim AS builder
 
-COPY requirements.txt /tmp
+WORKDIR /app
 
-RUN pip install -r /tmp/requirements.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-COPY ./src /src
+FROM python:3.12-slim
 
-CMD python /src/app.py
+RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser -d /app -s /sbin/nologin appuser
 
+WORKDIR /app
+
+COPY --from=builder /install /usr/local
+COPY ./src ./src
+
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+EXPOSE 5000
+
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "2", "src.app:app"]

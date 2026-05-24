@@ -1,8 +1,8 @@
-replicaCount: 1
+replicaCount: 2
 image:
-  repository: ricardoandre9707/python-app
+  repository: ""
   pullPolicy: IfNotPresent
-  tag: ed7159
+  tag: latest
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
@@ -13,8 +13,15 @@ serviceAccount:
   automount: true
   annotations: {}
   name: ""
-podSecurityContext: {}
-securityContext: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
 service:
   type: ClusterIP
   port: 5000
@@ -31,15 +38,22 @@ ingress:
 resources:
   requests:
     cpu: 50m
-    memory: 50M
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
 livenessProbe:
   httpGet:
     path: /api/v1/healthz
     port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
 readinessProbe:
   httpGet:
     path: /api/v1/healthz
     port: http
+  initialDelaySeconds: 3
+  periodSeconds: 5
 autoscaling:
   enabled: false
   minReplicas: 1
