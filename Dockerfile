@@ -1,11 +1,11 @@
-FROM python:3.12-slim AS builder
+FROM --platform=linux/arm64 python:3.12-slim AS builder
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-FROM python:3.12-slim
+FROM --platform=linux/arm64 python:3.12-slim
 
 RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser -d /app -s /sbin/nologin appuser
 
