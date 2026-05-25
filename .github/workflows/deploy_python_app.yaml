@@ -117,13 +117,14 @@ jobs:
           helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
             --namespace ${{ env.K8S_NAMESPACE }} \
             --create-namespace \
+            -f ${{ env.HELM_CHART_PATH }}/values-dev.yaml \
             --set image.repository=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }} \
             --set image.tag=${{ needs.build-and-push.outputs.image_tag }} \
             --wait \
             --timeout 300s
 
       - name: Verify deployment
-        run: kubectl rollout status deployment/${{ env.HELM_RELEASE_NAME }} -n ${{ env.K8S_NAMESPACE }} --timeout=120s
+        run: kubectl rollout status deployment -l app.kubernetes.io/instance=${{ env.HELM_RELEASE_NAME }} -n ${{ env.K8S_NAMESPACE }} --timeout=120s
 
   deploy-manual:
     name: Deploy (${{ github.event.inputs.environment }})
@@ -173,10 +174,11 @@ jobs:
           helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
             --namespace ${{ env.K8S_NAMESPACE }} \
             --create-namespace \
+            -f ${{ env.HELM_CHART_PATH }}/values-${{ github.event.inputs.environment }}.yaml \
             --set image.repository=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }} \
             --set image.tag=${{ steps.tag.outputs.tag }} \
             --wait \
             --timeout 300s
 
       - name: Verify deployment
-        run: kubectl rollout status deployment/${{ env.HELM_RELEASE_NAME }} -n ${{ env.K8S_NAMESPACE }} --timeout=120s
+        run: kubectl rollout status deployment -l app.kubernetes.io/instance=${{ env.HELM_RELEASE_NAME }} -n ${{ env.K8S_NAMESPACE }} --timeout=120s
