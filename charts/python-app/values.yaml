@@ -1,11 +1,11 @@
-replicaCount: 2
+replicaCount: 1
 image:
   repository: ""
   pullPolicy: IfNotPresent
   tag: latest
 imagePullSecrets: []
-nameOverride: ""
-fullnameOverride: ""
+deployment:
+  name: python-app
 podAnnotations: {}
 podLabels: {}
 serviceAccount:
@@ -23,9 +23,11 @@ securityContext:
     drop:
       - ALL
 service:
+  name: python-app-svc
   type: ClusterIP
   port: 5000
 ingress:
+  name: python-app-ingress
   enabled: true
   className: "nginx"
   annotations:

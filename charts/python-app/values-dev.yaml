@@ -1,0 +1,19 @@
+replicaCount: 1
+
+deployment:
+  name: python-app-dev
+service:
+  name: python-app-dev-svc
+ingress:
+  name: python-app-dev-ingress
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+autoscaling:
+  enabled: false

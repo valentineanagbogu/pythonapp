@@ -1,0 +1,22 @@
+replicaCount: 3
+
+deployment:
+  name: python-app-prod
+service:
+  name: python-app-prod-svc
+ingress:
+  name: python-app-prod-ingress
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 75
