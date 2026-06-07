@@ -34,7 +34,7 @@ env:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     if: github.event_name != 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
@@ -53,7 +53,7 @@ jobs:
 
   build-and-push:
     name: Build & Push
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment: dev
@@ -76,22 +76,16 @@ jobs:
         id: meta
         run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Build and push
         run: |
-          docker buildx build --platform linux/arm64 \
-            -t ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} \
-            -t ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:latest \
-            --push .
+          docker build -t ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} \
+            -t ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:latest .
+          docker push ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+          docker push ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
 
   deploy-auto:
     name: Deploy (dev)
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     needs: build-and-push
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment: dev
@@ -128,7 +122,7 @@ jobs:
 
   deploy-manual:
     name: Deploy (${{ github.event.inputs.environment }})
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     if: github.event_name == 'workflow_dispatch'
     environment: ${{ github.event.inputs.environment }}
     env:
