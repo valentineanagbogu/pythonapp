@@ -6,6 +6,11 @@ service:
   name: python-app-dev-svc
 ingress:
   name: python-app-dev-ingress
+  hosts:
+    - host: python-app.chukwuanugo.biz
+      paths:
+        - path: /
+          pathType: Prefix
 
 resources:
   requests:

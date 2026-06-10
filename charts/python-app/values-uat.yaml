@@ -6,6 +6,11 @@ service:
   name: python-app-uat-svc
 ingress:
   name: python-app-uat-ingress
+  hosts:
+    - host: python-app-uat.chukwuanugo.biz
+      paths:
+        - path: /
+          pathType: Prefix
 
 resources:
   requests:
