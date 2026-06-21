@@ -5,20 +5,19 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  repository_dispatch:
+    types: [deploy]
   workflow_dispatch:
     inputs:
       environment:
         description: "Environment to deploy"
         required: true
         type: choice
+        default: dev
         options:
           - dev
           - uat
           - prod
-      image_tag:
-        description: "Image tag to deploy (leave empty for latest)"
-        required: false
-        type: string
 
 permissions:
   id-token: write
@@ -35,7 +34,6 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
 
@@ -55,7 +53,7 @@ jobs:
     name: Build & Push
     runs-on: ubuntu-latest
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     environment: dev
     outputs:
       image_tag: ${{ steps.meta.outputs.tag }}
@@ -89,16 +87,12 @@ jobs:
             -t ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:latest \
             --push .
 
-  deploy-auto:
-    name: Deploy (dev)
+  deploy:
+    name: Deploy
     runs-on: ubuntu-latest
     needs: build-and-push
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment: dev
-    env:
-      ACR_NAME: devaksacr
-      AKS_CLUSTER: dev-k8s-aks
-      AKS_RG: dev-k8s-rg
+    if: github.event_name != 'pull_request'
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.event.client_payload.environment || 'dev' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -109,74 +103,40 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Get AKS credentials
-        run: az aks get-credentials --resource-group ${{ env.AKS_RG }} --name ${{ env.AKS_CLUSTER }} --overwrite-existing
-
-      - name: Deploy with Helm
+      - name: Resolve environment
+        id: env
         run: |
-          helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
-            --namespace ${{ env.K8S_NAMESPACE }} \
-            --create-namespace \
-            -f ${{ env.HELM_CHART_PATH }}/values-dev.yaml \
-            --set image.repository=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }} \
-            --set image.tag=${{ needs.build-and-push.outputs.image_tag }} \
-            --wait \
-            --timeout 300s
-
-      - name: Verify deployment
-        run: kubectl rollout status deployment -l app.kubernetes.io/instance=${{ env.HELM_RELEASE_NAME }} -n ${{ env.K8S_NAMESPACE }} --timeout=120s
-
-  deploy-manual:
-    name: Deploy (${{ github.event.inputs.environment }})
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
-    environment: ${{ github.event.inputs.environment }}
-    env:
-      ACR_NAME: ${{ github.event.inputs.environment == 'prod' && 'prodaksacr' || github.event.inputs.environment == 'uat' && 'testaksacr' || 'devaksacr' }}
-      AKS_CLUSTER: ${{ github.event.inputs.environment == 'prod' && 'prod-k8s-aks' || github.event.inputs.environment == 'uat' && 'test-k8s-aks' || 'dev-k8s-aks' }}
-      AKS_RG: ${{ github.event.inputs.environment == 'prod' && 'prod-k8s-rg' || github.event.inputs.environment == 'uat' && 'test-k8s-rg' || 'dev-k8s-rg' }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Azure Login
-        uses: azure/login@v3
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Resolve image tag
-        id: tag
-        run: |
-          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
-            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Login to source ACR
-        run: az acr login --name ${{ env.SOURCE_ACR }}
+          ENV="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.event.client_payload.environment || 'dev' }}"
+          case "$ENV" in
+            prod) ACR=prodaksacr; CLUSTER=prod-k8s-aks; RG=prod-k8s-rg;;
+            uat)  ACR=testaksacr; CLUSTER=test-k8s-aks; RG=test-k8s-rg;;
+            *)    ACR=devaksacr;  CLUSTER=dev-k8s-aks;  RG=dev-k8s-rg;;
+          esac
+          echo "name=$ENV" >> "$GITHUB_OUTPUT"
+          echo "acr=$ACR" >> "$GITHUB_OUTPUT"
+          echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
+          echo "rg=$RG" >> "$GITHUB_OUTPUT"
 
       - name: Import image to target ACR
-        if: env.ACR_NAME != env.SOURCE_ACR
+        if: steps.env.outputs.acr != env.SOURCE_ACR
         run: |
           az acr import \
-            --name ${{ env.ACR_NAME }} \
-            --source ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} \
-            --image ${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} \
+            --name ${{ steps.env.outputs.acr }} \
+            --source ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }} \
+            --image ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }} \
             --force
 
       - name: Get AKS credentials
-        run: az aks get-credentials --resource-group ${{ env.AKS_RG }} --name ${{ env.AKS_CLUSTER }} --overwrite-existing
+        run: az aks get-credentials --resource-group ${{ steps.env.outputs.rg }} --name ${{ steps.env.outputs.cluster }} --overwrite-existing
 
       - name: Deploy with Helm
         run: |
           helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ${{ env.HELM_CHART_PATH }} \
             --namespace ${{ env.K8S_NAMESPACE }} \
             --create-namespace \
-            -f ${{ env.HELM_CHART_PATH }}/values-${{ github.event.inputs.environment }}.yaml \
-            --set image.repository=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }} \
-            --set image.tag=${{ steps.tag.outputs.tag }} \
+            -f ${{ env.HELM_CHART_PATH }}/values-${{ steps.env.outputs.name }}.yaml \
+            --set image.repository=${{ steps.env.outputs.acr }}.azurecr.io/${{ env.IMAGE_NAME }} \
+            --set image.tag=${{ needs.build-and-push.outputs.image_tag }} \
             --wait \
             --timeout 300s
 
