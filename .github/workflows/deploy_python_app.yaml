@@ -25,7 +25,7 @@ permissions:
 
 env:
   IMAGE_NAME: python-app
-  SOURCE_ACR: devaksacr
+  ACR: acruksmgmt
   HELM_CHART_PATH: charts/python-app
   HELM_RELEASE_NAME: python-app
   K8S_NAMESPACE: python-app
@@ -68,7 +68,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Login to ACR
-        run: az acr login --name ${{ env.SOURCE_ACR }}
+        run: az acr login --name ${{ env.ACR }}
 
       - name: Set image tag
         id: meta
@@ -83,8 +83,8 @@ jobs:
       - name: Build and push
         run: |
           docker buildx build --platform linux/arm64 \
-            -t ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} \
-            -t ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:latest \
+            -t ${{ env.ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} \
+            -t ${{ env.ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:latest \
             --push .
 
   deploy:
@@ -108,23 +108,13 @@ jobs:
         run: |
           ENV="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || github.event.client_payload.environment || 'dev' }}"
           case "$ENV" in
-            prod) ACR=prodaksacr; CLUSTER=prod-k8s-aks; RG=prod-k8s-rg;;
-            uat)  ACR=testaksacr; CLUSTER=test-k8s-aks; RG=test-k8s-rg;;
-            *)    ACR=devaksacr;  CLUSTER=dev-k8s-aks;  RG=dev-k8s-rg;;
+            prod) CLUSTER=prod-k8s-aks; RG=prod-k8s-rg;;
+            uat)  CLUSTER=test-k8s-aks; RG=test-k8s-rg;;
+            *)    CLUSTER=dev-k8s-aks;  RG=dev-k8s-rg;;
           esac
           echo "name=$ENV" >> "$GITHUB_OUTPUT"
-          echo "acr=$ACR" >> "$GITHUB_OUTPUT"
           echo "cluster=$CLUSTER" >> "$GITHUB_OUTPUT"
           echo "rg=$RG" >> "$GITHUB_OUTPUT"
-
-      - name: Import image to target ACR
-        if: steps.env.outputs.acr != env.SOURCE_ACR
-        run: |
-          az acr import \
-            --name ${{ steps.env.outputs.acr }} \
-            --source ${{ env.SOURCE_ACR }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }} \
-            --image ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }} \
-            --force
 
       - name: Get AKS credentials
         run: az aks get-credentials --resource-group ${{ steps.env.outputs.rg }} --name ${{ steps.env.outputs.cluster }} --overwrite-existing
@@ -135,7 +125,7 @@ jobs:
             --namespace ${{ env.K8S_NAMESPACE }} \
             --create-namespace \
             -f ${{ env.HELM_CHART_PATH }}/values-${{ steps.env.outputs.name }}.yaml \
-            --set image.repository=${{ steps.env.outputs.acr }}.azurecr.io/${{ env.IMAGE_NAME }} \
+            --set image.repository=${{ env.ACR }}.azurecr.io/${{ env.IMAGE_NAME }} \
             --set image.tag=${{ needs.build-and-push.outputs.image_tag }} \
             --wait \
             --timeout 300s
